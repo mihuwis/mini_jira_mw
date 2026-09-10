@@ -1,10 +1,9 @@
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, where } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, where, updateDoc } from "firebase/firestore";
 import { db } from "../../../app/firebase/firebase";
 import { storyService } from "../../stories/services/stories.service";
-import { getAllUsers } from "../../users/services/user.service";
 import type { Story } from "../../stories/types/story.types";
-import type { User } from "../../users/types/user.types";
 import type { Task, CreateTaskDto, UpdateTaskDto, TaskOperationResult } from "../types/task.types";
+import { userProfileService } from "../../users/services/userProfile.service";
 
 const TASKS_COLLECTION = "tasks";
 
@@ -108,32 +107,37 @@ const assignUserToTask = async (
   userId: string,
   taskId: string,
 ): Promise<TaskOperationResult> => {
-  const taskToUpdate = await getById(taskId);
-  const listOfUsers: User[] = getAllUsers();
-  const assignedUser = listOfUsers.find((user) => user.uid === userId);
-  const currentStory = taskToUpdate ? await storyService.getById(taskToUpdate.storyId) : undefined;
+  const task = await getById(taskId);
 
-  if (!taskToUpdate) return { success: false, reason: "task-not-found" };
-  if (!assignedUser) return { success: false, reason: "user-not-found" };
-  if (assignedUser.role !== "developer" && assignedUser.role !== "devops") {
+  if (!task) {
+    return { success: false, reason: "task-not-found" };
+  }
+
+  const user = await userProfileService.getByUid(userId);
+
+  if (!user) {
+    return { success: false, reason: "user-not-found" };
+  }
+
+  if (
+    user.isBlocked ||
+    !["admin", "developer", "devops"].includes(user.role)
+  ) {
     return { success: false, reason: "user-role-not-allowed" };
   }
-  if (!currentStory) return { success: false, reason: "story-not-found" };
 
-  const updatedTask: Task = {
-    ...taskToUpdate,
-    assignedUserId: userId,
-    status: "doing",
-    startedAt: taskToUpdate.startedAt ?? new Date().toISOString(),
-  };
-
-  await setDoc(doc(db, TASKS_COLLECTION, taskId), updatedTask);
-
-  if (currentStory.status === "todo") {
-    await storyService.updateStory(currentStory.id, { status: "doing" });
+  if (task.assignedUserId === userId) {
+    return { success: true, task };
   }
 
-  return { success: true, task: updatedTask };
+  await updateDoc(doc(db, TASKS_COLLECTION, taskId), {
+    assignedUserId: userId,
+  });
+
+  return {
+    success: true,
+    task: { ...task, assignedUserId: userId },
+  };
 };
 
 const markTaskAsDone = async (taskId: string): Promise<TaskOperationResult> => {
